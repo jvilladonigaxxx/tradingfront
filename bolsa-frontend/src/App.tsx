@@ -24,9 +24,20 @@ export default function App() {
     const [nextInvestment, setNextInvestment] = useState(6000);
     const [opsPerDay, setOpsPerDay] = useState(5);
     const [selectedDate, setSelectedDate] = useState<Date | null>(null);
-    const [stopLoss, setStopLoss] = useState<number>(2);
-    const [takeProfit, setTakeProfit] = useState<number>(5);
+    const [stopLoss, setStopLoss] = useState<number>(2.0);
+    const [takeProfit, setTakeProfit] = useState<number>(5.0);
+    const [stopLossInput, setStopLossInput] = useState<string>("2.0");
+    const [takeProfitInput, setTakeProfitInput] = useState<string>("5.0");
     const [errorMessage, setErrorMessage] = useState("");
+
+    // Modal states
+    const [showEarningsModal, setShowEarningsModal] = useState(false);
+    const [showSettingsModal, setShowSettingsModal] = useState(false);
+    const [showResponseModal, setShowResponseModal] = useState(false);
+    const [responseMessage, setResponseMessage] = useState({ type: '', message: '' });
+
+    // Historical operations filter
+    const [historicalPeriod, setHistoricalPeriod] = useState(5);
 
     const [operations] = useState<Operation[]>([
         { date: "2025-11-28", symbol: "AAPL", buyPrice: 180, sellPrice: 187, shares: 10, profit: 70, returnPercent: 3.8, sellType: "TP" },
@@ -36,52 +47,65 @@ export default function App() {
 
     const [earnings, setEarnings] = useState<Company[]>([]);
     const [selectedCompanies, setSelectedCompanies] = useState<Company[]>([]);
+    const [allEarningsForMonth, setAllEarningsForMonth] = useState<Company[]>([]);
+    const [isLoadingEarnings, setIsLoadingEarnings] = useState(false);
 
     const [earningsPage, setEarningsPage] = useState(1);
     const [selectedPage, setSelectedPage] = useState(1);
     const itemsPerPage = 5;
 
-    const mockEarnings: Company[] = [
-        { name: "Apple Inc.", ticker: "AAPL", reportTime: "AMC" },
-        { name: "Tesla Inc.", ticker: "TSLA", reportTime: "BMO" },
-        { name: "Google LLC", ticker: "GOOG", reportTime: "AMC" },
-        { name: "Microsoft Corp.", ticker: "MSFT", reportTime: "AMC" },
-        { name: "Amazon.com Inc.", ticker: "AMZN", reportTime: "BMO" },
-        { name: "Meta Platforms", ticker: "META", reportTime: "AMC" },
-        { name: "Nvidia Corp.", ticker: "NVDA", reportTime: "BMO" },
-        { name: "Intel Corp.", ticker: "INTC", reportTime: "AMC" },
-        { name: "Netflix Inc.", ticker: "NFLX", reportTime: "AMC" },
-        { name: "Adobe Inc.", ticker: "ADBE", reportTime: "BMO" },
-        { name: "Salesforce.com", ticker: "CRM", reportTime: "AMC" },
-        { name: "PayPal Holdings", ticker: "PYPL", reportTime: "AMC" },
-        { name: "Cisco Systems", ticker: "CSCO", reportTime: "BMO" },
-        { name: "Oracle Corp.", ticker: "ORCL", reportTime: "AMC" },
-        { name: "AMD", ticker: "AMD", reportTime: "BMO" },
-        { name: "IBM", ticker: "IBM", reportTime: "AMC" },
-        { name: "Shopify Inc.", ticker: "SHOP", reportTime: "AMC" },
-        { name: "Square Inc.", ticker: "SQ", reportTime: "BMO" },
-        { name: "Uber Technologies", ticker: "UBER", reportTime: "AMC" },
-        { name: "Lyft Inc.", ticker: "LYFT", reportTime: "BMO" },
-    ];
 
+    // Fetch earnings data from API when date is selected
     useEffect(() => {
         if (selectedDate) {
-            setEarnings(
-                mockEarnings.filter(c => !selectedCompanies.some(s => s.ticker === c.ticker))
-            );
+            const year = selectedDate.getFullYear();
+            const month = selectedDate.getMonth() + 1; // JavaScript months are 0-indexed
+            const dateString = selectedDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+
+            setIsLoadingEarnings(true);
+
+            fetch(`https://q0hjxggpk8.execute-api.us-west-2.amazonaws.com/dev/calendar/${year}/${month}`)
+                .then(response => response.json())
+                .then(data => {
+                    // Convert object to array and filter companies for the selected date
+                    const companiesForDate = Object.entries(data)
+                        .filter(([_, info]: [string, any]) => info.date === dateString)
+                        .map(([ticker, info]: [string, any]) => ({
+                            name: ticker, // Using ticker as name since API doesn't provide full name
+                            ticker: ticker,
+                            reportTime: info.time || "N/A"
+                        }));
+
+                    setAllEarningsForMonth(companiesForDate);
+
+                    // Always reset and select all companies for the new date
+                    setSelectedCompanies(companiesForDate);
+                    setEarnings([]);
+
+                    // Check if auto-selected companies exceed the limit
+                    if (companiesForDate.length > opsPerDay) {
+                        setErrorMessage(`You reached the maximum number of selected companies (${opsPerDay}).`);
+                    } else {
+                        setErrorMessage("");
+                    }
+
+                    setIsLoadingEarnings(false);
+                })
+                .catch(error => {
+                    console.error('Error fetching earnings data:', error);
+                    setIsLoadingEarnings(false);
+                    setErrorMessage('Failed to load earnings data. Please try again.');
+                });
         } else {
             setEarnings([]);
-        }
-
-        if (selectedCompanies.length > opsPerDay) {
-            setErrorMessage(`You reached the maximum number of selected companies (${opsPerDay}).`);
-        } else {
+            setSelectedCompanies([]);
+            setAllEarningsForMonth([]);
             setErrorMessage("");
         }
 
         setEarningsPage(1);
         setSelectedPage(1);
-    }, [selectedDate, selectedCompanies, opsPerDay]);
+    }, [selectedDate]);
 
     const moveToSelected = (company: Company) => {
         if (selectedCompanies.length >= opsPerDay) {
@@ -95,7 +119,13 @@ export default function App() {
 
     const moveBackToEarnings = (company: Company) => {
         setSelectedCompanies(prev => prev.filter(c => c.ticker !== company.ticker));
-        setEarnings(prev => [...prev, company]);
+        setEarnings(prev => {
+            // Only add back if it's in the original earnings for the month
+            if (allEarningsForMonth.some(c => c.ticker === company.ticker)) {
+                return [...prev, company];
+            }
+            return prev;
+        });
         setErrorMessage("");
     };
 
@@ -109,8 +139,8 @@ export default function App() {
         selectedPage * itemsPerPage
     );
 
-    const totalEarningsPages = Math.max(1, Math.ceil(earnings.length / itemsPerPage));
-    const totalSelectedPages = Math.max(1, Math.ceil(selectedCompanies.length / itemsPerPage));
+
+
 
     const filteredOperations = operations.filter((op) => {
         const opDate = new Date(op.date);
@@ -122,10 +152,100 @@ export default function App() {
     const profitPerDay = uniqueDays > 0 ? totalProfit / uniqueDays : 0;
 
     const getHistoricalOperations = (days: number) => {
-        const today = selectedDate || new Date();
+        if (operations.length === 0) return [];
+
+        // Use today's date as the reference point
+        const today = new Date();
+        today.setHours(23, 59, 59, 999); // End of today
+
+        // Calculate the threshold date (days before today)
         const thresholdDate = new Date(today);
         thresholdDate.setDate(today.getDate() - days);
-        return operations.filter(op => new Date(op.date) >= thresholdDate && new Date(op.date) <= today);
+        thresholdDate.setHours(0, 0, 0, 0); // Start of that day
+
+        return operations.filter(op => {
+            const opDate = new Date(op.date);
+            return opDate >= thresholdDate && opDate <= today;
+        });
+    };
+
+    const handleEarningsSubmit = () => {
+        setShowEarningsModal(false);
+        console.log("Confirmed companies from Earnings:", selectedCompanies);
+        // Add your submission logic here
+    };
+
+    const handleSettingsSubmit = () => {
+        setShowSettingsModal(false);
+
+        const settingsData = {
+            stopLoss,
+            takeProfit,
+            nextInvestment,
+            opsPerDay
+        };
+
+        console.log("Submitting settings:", settingsData);
+
+        // Make POST request to settings API
+        fetch('https://q0hjxggpk8.execute-api.us-west-2.amazonaws.com/dev/settings', {
+            method: 'POST',
+            mode: 'cors',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            },
+            body: JSON.stringify(settingsData)
+        })
+        .then(response => {
+            console.log('Response status:', response.status);
+            console.log('Response ok:', response.ok);
+            console.log('Response headers:', response.headers);
+
+            // Check if response has content
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                return response.json().then(data => {
+                    console.log('Response data:', data);
+                    return { ok: response.ok, status: response.status, data };
+                });
+            } else {
+                // If no JSON content, return empty object
+                return response.text().then(text => {
+                    console.log('Response text:', text);
+                    return { ok: response.ok, status: response.status, data: { message: text || 'Success' } };
+                });
+            }
+        })
+        .then(({ ok, status, data }) => {
+            if (!ok) {
+                throw new Error(data.error || data.message || `HTTP error! status: ${status}`);
+            }
+
+            console.log('Settings saved successfully:', data);
+            setResponseMessage({
+                type: 'success',
+                message: data.message || 'Settings saved successfully!'
+            });
+            setShowResponseModal(true);
+        })
+        .catch(error => {
+            console.error('Error saving settings:', error);
+
+            // Check if it's a CORS error
+            if (error.message.includes('CORS') || error.message.includes('NetworkError') || error.name === 'TypeError') {
+                setResponseMessage({
+                    type: 'error',
+                    message: 'CORS Error: The server needs to allow requests from this origin. Please check the API Gateway CORS configuration.'
+                });
+            } else {
+                setResponseMessage({
+                    type: 'error',
+                    message: error.message || 'Failed to save settings. Please check console for details.'
+                });
+            }
+            setShowResponseModal(true);
+        });
     };
 
     return (
@@ -162,91 +282,163 @@ export default function App() {
                         </div>
                     </section>
 
-                    {/* Operations Table */}
+                    {/* Operations Table with Stats */}
                     <h2 className="table-title">Operations List: {selectedDate ? selectedDate.toDateString() : ""}</h2>
-                    <div className="table-wrapper">
-                        <table className="beautiful-table">
-                            <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Symbol</th>
-                                <th>Buy Price</th>
-                                <th>Sell Price</th>
-                                <th>Shares</th>
-                                <th>Profit</th>
-                                <th>Return (%)</th>
-                                <th>Sell Type</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            {filteredOperations.length === 0 ? (
+                    <div className="operations-with-stats">
+                        <div className="table-wrapper">
+                            <table className="beautiful-table">
+                                <thead>
                                 <tr>
-                                    <td colSpan={8} className="empty-row">
-                                        No operations match the selected date.
-                                    </td>
+                                    <th>Date</th>
+                                    <th>Symbol</th>
+                                    <th>Buy Price</th>
+                                    <th>Sell Price</th>
+                                    <th>Shares</th>
+                                    <th>Profit</th>
+                                    <th>Return (%)</th>
+                                    <th>Sell Type</th>
                                 </tr>
-                            ) : (
-                                filteredOperations.map((op, i) => (
-                                    <tr key={i}>
-                                        <td>{op.date}</td>
-                                        <td>{op.symbol}</td>
-                                        <td>{op.buyPrice}</td>
-                                        <td>{op.sellPrice}</td>
-                                        <td>{op.shares}</td>
-                                        <td className={op.profit >= 0 ? "positive" : "negative"}>{op.profit} $</td>
-                                        <td>{op.returnPercent}%</td>
-                                        <td>{op.sellType}</td>
+                                </thead>
+                                <tbody>
+                                {filteredOperations.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={8} className="empty-row">
+                                            No operations match the selected date.
+                                        </td>
                                     </tr>
-                                ))
-                            )}
-                            </tbody>
-                        </table>
+                                ) : (
+                                    filteredOperations.map((op, i) => (
+                                        <tr key={i}>
+                                            <td>{op.date}</td>
+                                            <td>{op.symbol}</td>
+                                            <td>{op.buyPrice}</td>
+                                            <td>{op.sellPrice}</td>
+                                            <td>{op.shares}</td>
+                                            <td className={op.profit >= 0 ? "positive" : "negative"}>{op.profit} $</td>
+                                            <td className={op.returnPercent >= 0 ? "positive" : "negative"}>{op.returnPercent}%</td>
+                                            <td>{op.sellType}</td>
+                                        </tr>
+                                    ))
+                                )}
+                                </tbody>
+                            </table>
+                        </div>
+                        {filteredOperations.length > 0 && (
+                            <div className="operations-stats">
+                                <div className="stat-card">
+                                    <span>Overall Profit</span>
+                                    <strong className={filteredOperations.reduce((sum, op) => sum + op.profit, 0) >= 0 ? "positive" : "negative"}>
+                                        {filteredOperations.reduce((sum, op) => sum + op.profit, 0).toFixed(2)} $
+                                    </strong>
+                                </div>
+                                <div className="stat-card">
+                                    <span>Win/Loss Rate</span>
+                                    <strong>
+                                        <span className="positive">{filteredOperations.filter(op => op.profit >= 0).length}</span>
+                                        {" / "}
+                                        <span className="negative">{filteredOperations.filter(op => op.profit < 0).length}</span>
+                                    </strong>
+                                    <div style={{ fontSize: '14px', marginTop: '8px', color: '#666' }}>
+                                        {((filteredOperations.filter(op => op.profit >= 0).length / filteredOperations.length) * 100).toFixed(1)}% Win Rate
+                                    </div>
+                                </div>
+                                <div className="stat-card">
+                                    <span>$ Won / $ Lost</span>
+                                    <strong>
+                                        <span className="positive">{filteredOperations.filter(op => op.profit >= 0).reduce((sum, op) => sum + op.profit, 0).toFixed(2)} $</span>
+                                        {" / "}
+                                        <span className="negative">{Math.abs(filteredOperations.filter(op => op.profit < 0).reduce((sum, op) => sum + op.profit, 0)).toFixed(2)} $</span>
+                                    </strong>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Historical Operations */}
                     <section className="historical-operations">
-                        <h2>Historical Operations</h2>
-                        {[5, 15, 30].map(days => (
-                            <div key={days} className="historical-box">
-                                <h3>Last {days} Days</h3>
-                                <div className="table-wrapper">
-                                    <table className="beautiful-table">
-                                        <thead>
-                                        <tr>
-                                            <th>Date</th>
-                                            <th>Symbol</th>
-                                            <th>Buy Price</th>
-                                            <th>Sell Price</th>
-                                            <th>Shares</th>
-                                            <th>Profit</th>
-                                            <th>Return (%)</th>
-                                            <th>Sell Type</th>
-                                        </tr>
-                                        </thead>
-                                        <tbody>
-                                        {getHistoricalOperations(days).length === 0 ? (
-                                            <tr>
-                                                <td colSpan={8} className="empty-row">No operations</td>
-                                            </tr>
-                                        ) : (
-                                            getHistoricalOperations(days).map((op, i) => (
-                                                <tr key={i}>
-                                                    <td>{op.date}</td>
-                                                    <td>{op.symbol}</td>
-                                                    <td>{op.buyPrice}</td>
-                                                    <td>{op.sellPrice}</td>
-                                                    <td>{op.shares}</td>
-                                                    <td className={op.profit >= 0 ? "positive" : "negative"}>{op.profit} $</td>
-                                                    <td>{op.returnPercent}%</td>
-                                                    <td>{op.sellType}</td>
-                                                </tr>
-                                            ))
-                                        )}
-                                        </tbody>
-                                    </table>
-                                </div>
+                        <div className="historical-header">
+                            <h2>Historical Operations</h2>
+                            <div className="historical-filter">
+                                <label>Period:</label>
+                                <select
+                                    value={historicalPeriod}
+                                    onChange={(e) => setHistoricalPeriod(Number(e.target.value))}
+                                    className="period-select"
+                                >
+                                    <option value={5}>Previous 5 days</option>
+                                    <option value={10}>Previous 10 days</option>
+                                    <option value={15}>Previous 15 days</option>
+                                    <option value={30}>Previous 30 days</option>
+                                </select>
                             </div>
-                        ))}
+                        </div>
+                        <div className="operations-with-stats">
+                            <div className="table-wrapper">
+                                <table className="beautiful-table">
+                                    <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Symbol</th>
+                                        <th>Buy Price</th>
+                                        <th>Sell Price</th>
+                                        <th>Shares</th>
+                                        <th>Profit</th>
+                                        <th>Return (%)</th>
+                                        <th>Sell Type</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    {getHistoricalOperations(historicalPeriod).length === 0 ? (
+                                        <tr>
+                                            <td colSpan={8} className="empty-row">No operations</td>
+                                        </tr>
+                                    ) : (
+                                        getHistoricalOperations(historicalPeriod).map((op, i) => (
+                                            <tr key={i}>
+                                                <td>{op.date}</td>
+                                                <td>{op.symbol}</td>
+                                                <td>{op.buyPrice}</td>
+                                                <td>{op.sellPrice}</td>
+                                                <td>{op.shares}</td>
+                                                <td className={op.profit >= 0 ? "positive" : "negative"}>{op.profit} $</td>
+                                                <td className={op.returnPercent >= 0 ? "positive" : "negative"}>{op.returnPercent}%</td>
+                                                <td>{op.sellType}</td>
+                                            </tr>
+                                        ))
+                                    )}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {getHistoricalOperations(historicalPeriod).length > 0 && (
+                                <div className="operations-stats">
+                                    <div className="stat-card">
+                                        <span>Overall Profit</span>
+                                        <strong className={getHistoricalOperations(historicalPeriod).reduce((sum, op) => sum + op.profit, 0) >= 0 ? "positive" : "negative"}>
+                                            {getHistoricalOperations(historicalPeriod).reduce((sum, op) => sum + op.profit, 0).toFixed(2)} $
+                                        </strong>
+                                    </div>
+                                    <div className="stat-card">
+                                        <span>Win/Loss Rate</span>
+                                        <strong>
+                                            <span className="positive">{getHistoricalOperations(historicalPeriod).filter(op => op.profit >= 0).length}</span>
+                                            {" / "}
+                                            <span className="negative">{getHistoricalOperations(historicalPeriod).filter(op => op.profit < 0).length}</span>
+                                        </strong>
+                                        <div style={{ fontSize: '14px', marginTop: '8px', color: '#666' }}>
+                                            {((getHistoricalOperations(historicalPeriod).filter(op => op.profit >= 0).length / getHistoricalOperations(historicalPeriod).length) * 100).toFixed(1)}% Win Rate
+                                        </div>
+                                    </div>
+                                    <div className="stat-card">
+                                        <span>$ Won / $ Lost</span>
+                                        <strong>
+                                            <span className="positive">{getHistoricalOperations(historicalPeriod).filter(op => op.profit >= 0).reduce((sum, op) => sum + op.profit, 0).toFixed(2)} $</span>
+                                            {" / "}
+                                            <span className="negative">{Math.abs(getHistoricalOperations(historicalPeriod).filter(op => op.profit < 0).reduce((sum, op) => sum + op.profit, 0)).toFixed(2)} $</span>
+                                        </strong>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </section>
                 </div>
 
@@ -255,17 +447,41 @@ export default function App() {
                     {/* Earnings Section */}
                     <section className="earnings-section">
                         <h2>Earnings for {selectedDate ? selectedDate.toDateString() : ""}</h2>
-                        <div className="earnings-boxes">
-                            <div className="earnings-box">
-                                <h3>Earnings</h3>
-                                <ul>
-                                    {paginatedEarnings.map((company, index) => (
-                                        <li key={index}>
-                                            <span>{company.ticker} ({company.reportTime})</span>
-                                            <button onClick={() => moveToSelected(company)}>→</button>
-                                        </li>
-                                    ))}
-                                </ul>
+                        {isLoadingEarnings ? (
+                            <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
+                                Loading earnings data...
+                            </div>
+                        ) : (
+                            <>
+                                <div className="earnings-boxes">
+                                    <div className="earnings-box">
+                                        <h3>Earnings</h3>
+                                        <ul>
+                                            {paginatedEarnings.map((company, index) => (
+                                                <li key={index}>
+                                                    <span>{company.ticker} ({company.reportTime})</span>
+                                                    <button onClick={() => moveToSelected(company)}>→</button>
+                                                </li>
+                                            ))}
+                                            {earnings.length === 0 && !isLoadingEarnings && <p>No companies available.</p>}
+                                        </ul>
+                                {earnings.length > itemsPerPage && (
+                                    <div className="pagination">
+                                        <button
+                                            onClick={() => setEarningsPage(prev => Math.max(1, prev - 1))}
+                                            disabled={earningsPage === 1}
+                                        >
+                                            ←
+                                        </button>
+                                        <span>Page {earningsPage} of {Math.ceil(earnings.length / itemsPerPage)}</span>
+                                        <button
+                                            onClick={() => setEarningsPage(prev => Math.min(Math.ceil(earnings.length / itemsPerPage), prev + 1))}
+                                            disabled={earningsPage === Math.ceil(earnings.length / itemsPerPage)}
+                                        >
+                                            →
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                             <div className="earnings-box selected-companies-box">
                                 <h3>Selected Companies</h3>
@@ -278,18 +494,37 @@ export default function App() {
                                     ))}
                                     {selectedCompanies.length === 0 && <p>No companies selected.</p>}
                                 </ul>
+                                {selectedCompanies.length > itemsPerPage && (
+                                    <div className="pagination">
+                                        <button
+                                            onClick={() => setSelectedPage(prev => Math.max(1, prev - 1))}
+                                            disabled={selectedPage === 1}
+                                        >
+                                            ←
+                                        </button>
+                                        <span>Page {selectedPage} of {Math.ceil(selectedCompanies.length / itemsPerPage)}</span>
+                                        <button
+                                            onClick={() => setSelectedPage(prev => Math.min(Math.ceil(selectedCompanies.length / itemsPerPage), prev + 1))}
+                                            disabled={selectedPage === Math.ceil(selectedCompanies.length / itemsPerPage)}
+                                        >
+                                            →
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         </div>
-                        {errorMessage && <div className="error-message">{errorMessage}</div>}
+                                {errorMessage && <div className="error-message">{errorMessage}</div>}
 
-                        {/* NEW Submit button for Earnings section */}
-                        <button
-                            className="submit-button"
-                            onClick={() => console.log("Submitted companies from Earnings:", selectedCompanies)}
-                            disabled={selectedCompanies.length > opsPerDay}
-                        >
-                            Submit
-                        </button>
+                                {/* Submit button for Earnings section */}
+                                <button
+                                    className="submit-button"
+                                    onClick={() => setShowEarningsModal(true)}
+                                    disabled={selectedCompanies.length > opsPerDay}
+                                >
+                                    Submit
+                                </button>
+                            </>
+                        )}
                     </section>
 
                     {/* Trading Settings Section */}
@@ -298,11 +533,51 @@ export default function App() {
                         <div className="trading-settings-grid">
                             <div className="trading-setting-item">
                                 <label>Stop Loss (%)</label>
-                                <input type="number" value={stopLoss} onChange={e => setStopLoss(Number(e.target.value))} />
+                                <input
+                                    type="text"
+                                    value={stopLossInput}
+                                    onChange={e => {
+                                        const value = e.target.value;
+                                        // Allow typing decimal numbers
+                                        if (value === '' || /^\d*\.?\d*$/.test(value)) {
+                                            setStopLossInput(value);
+                                        }
+                                    }}
+                                    onBlur={e => {
+                                        const val = parseFloat(e.target.value);
+                                        if (isNaN(val) || val < 0) {
+                                            setStopLoss(2.0);
+                                            setStopLossInput("2.0");
+                                        } else {
+                                            setStopLoss(val);
+                                            setStopLossInput(val.toFixed(1));
+                                        }
+                                    }}
+                                />
                             </div>
                             <div className="trading-setting-item">
                                 <label>Take Profit (%)</label>
-                                <input type="number" value={takeProfit} onChange={e => setTakeProfit(Number(e.target.value))} />
+                                <input
+                                    type="text"
+                                    value={takeProfitInput}
+                                    onChange={e => {
+                                        const value = e.target.value;
+                                        // Allow typing decimal numbers
+                                        if (value === '' || /^\d*\.?\d*$/.test(value)) {
+                                            setTakeProfitInput(value);
+                                        }
+                                    }}
+                                    onBlur={e => {
+                                        const val = parseFloat(e.target.value);
+                                        if (isNaN(val) || val < 0) {
+                                            setTakeProfit(5.0);
+                                            setTakeProfitInput("5.0");
+                                        } else {
+                                            setTakeProfit(val);
+                                            setTakeProfitInput(val.toFixed(1));
+                                        }
+                                    }}
+                                />
                             </div>
                             <div className="trading-setting-item">
                                 <label>Next Investment per Trade</label>
@@ -314,16 +589,97 @@ export default function App() {
                             </div>
                         </div>
 
-                        {/* Existing Trading Settings Submit */}
+                        {/* Trading Settings Submit */}
                         <button
                             className="submit-button"
-                            onClick={() => console.log("Submitted from Trading Settings")}
+                            onClick={() => setShowSettingsModal(true)}
                         >
                             Submit
                         </button>
                     </section>
                 </div>
             </div>
+
+            {/* Earnings Confirmation Modal */}
+            {showEarningsModal && (
+                <div className="modal-overlay" onClick={() => setShowEarningsModal(false)}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <h2>Confirm Selected Companies</h2>
+                        <p>Are you sure you want to submit the following companies?</p>
+                        <div className="modal-list">
+                            {selectedCompanies.map((company, index) => (
+                                <div key={index} className="modal-list-item">
+                                    <strong>{company.ticker}</strong> - {company.name} ({company.reportTime})
+                                </div>
+                            ))}
+                        </div>
+                        <div className="modal-actions">
+                            <button className="modal-button cancel" onClick={() => setShowEarningsModal(false)}>
+                                Cancel
+                            </button>
+                            <button className="modal-button confirm" onClick={handleEarningsSubmit}>
+                                Confirm
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Settings Confirmation Modal */}
+            {showSettingsModal && (
+                <div className="modal-overlay" onClick={() => setShowSettingsModal(false)}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <h2>Confirm Trading Settings</h2>
+                        <p>Are you sure you want to save the following settings?</p>
+                        <div className="modal-settings">
+                            <div className="modal-setting-row">
+                                <span>Stop Loss:</span>
+                                <strong>{stopLoss}%</strong>
+                            </div>
+                            <div className="modal-setting-row">
+                                <span>Take Profit:</span>
+                                <strong>{takeProfit}%</strong>
+                            </div>
+                            <div className="modal-setting-row">
+                                <span>Next Investment per Trade:</span>
+                                <strong>${nextInvestment}</strong>
+                            </div>
+                            <div className="modal-setting-row">
+                                <span>Trades per Day:</span>
+                                <strong>{opsPerDay}</strong>
+                            </div>
+                        </div>
+                        <div className="modal-actions">
+                            <button className="modal-button cancel" onClick={() => setShowSettingsModal(false)}>
+                                Cancel
+                            </button>
+                            <button className="modal-button confirm" onClick={handleSettingsSubmit}>
+                                Confirm
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Response Modal (Success/Error) */}
+            {showResponseModal && (
+                <div className="modal-overlay" onClick={() => setShowResponseModal(false)}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <h2>{responseMessage.type === 'success' ? '✓ Success' : '✗ Error'}</h2>
+                        <div className={`response-message ${responseMessage.type}`}>
+                            {responseMessage.message}
+                        </div>
+                        <div className="modal-actions">
+                            <button
+                                className={`modal-button ${responseMessage.type === 'success' ? 'confirm' : 'cancel'}`}
+                                onClick={() => setShowResponseModal(false)}
+                            >
+                                OK
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
