@@ -18,6 +18,10 @@ interface Company {
     name: string;
     ticker: string;
     reportTime: string;
+    eventName?: string;
+    currentPrice?: number;
+    percentageChange90d?: number;
+    marketCap?: string;
 }
 
 export default function App() {
@@ -55,25 +59,27 @@ export default function App() {
     const itemsPerPage = 5;
 
 
-    // Fetch earnings data from API when date is selected
     useEffect(() => {
         if (selectedDate) {
             const year = selectedDate.getFullYear();
             const month = selectedDate.getMonth() + 1; // JavaScript months are 0-indexed
-            const dateString = selectedDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+            const day = selectedDate.getDate();
 
             setIsLoadingEarnings(true);
 
-            fetch(`https://q0hjxggpk8.execute-api.us-west-2.amazonaws.com/dev/calendar/${year}/${month}`)
+            fetch(`https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/calendar/${year}/${month}/${day}`)
                 .then(response => response.json())
                 .then(data => {
-                    // Convert object to array and filter companies for the selected date
+                    // Convert object to array - new API format has symbol as key
                     const companiesForDate = Object.entries(data)
-                        .filter(([_, info]: [string, any]) => info.date === dateString)
                         .map(([ticker, info]: [string, any]) => ({
-                            name: ticker, // Using ticker as name since API doesn't provide full name
-                            ticker: ticker,
-                            reportTime: info.time || "N/A"
+                            ticker: info.symbol || ticker,
+                            name: info.company || ticker,
+                            reportTime: info.earnings_call_time || "N/A",
+                            eventName: info.event_name,
+                            currentPrice: info.current_price,
+                            percentageChange90d: info.percentage_change_90d,
+                            marketCap: info.market_cap
                         }));
 
                     setAllEarningsForMonth(companiesForDate);
@@ -105,7 +111,7 @@ export default function App() {
 
         setEarningsPage(1);
         setSelectedPage(1);
-    }, [selectedDate]);
+    }, [selectedDate, opsPerDay]);
 
     const moveToSelected = (company: Company) => {
         if (selectedCompanies.length >= opsPerDay) {
@@ -171,8 +177,81 @@ export default function App() {
 
     const handleEarningsSubmit = () => {
         setShowEarningsModal(false);
-        console.log("Confirmed companies from Earnings:", selectedCompanies);
-        // Add your submission logic here
+
+        const companyTickers = selectedCompanies.map(company => company.ticker);
+
+        const year = selectedDate ? selectedDate.getFullYear() : null;
+        const month = selectedDate ? selectedDate.getMonth() + 1 : null;
+        const day = selectedDate ? selectedDate.getDate() : null;
+
+        const earningsData = {
+            companies: companyTickers,
+            year: year,
+            month: month,
+            day: day
+        };
+
+        console.log("Submitting earnings companies:", earningsData);
+
+        // Make POST request to companies API
+        fetch('https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/companies', {
+            method: 'POST',
+            mode: 'cors',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            },
+            body: JSON.stringify(earningsData)
+        })
+        .then(response => {
+            console.log('Response status:', response.status);
+            console.log('Response ok:', response.ok);
+            console.log('Response headers:', response.headers);
+
+            // Check if response has content
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                return response.json().then(data => {
+                    console.log('Response data:', data);
+                    return { ok: response.ok, status: response.status, data };
+                });
+            } else {
+                // If no JSON content, return empty object
+                return response.text().then(text => {
+                    console.log('Response text:', text);
+                    return { ok: response.ok, status: response.status, data: { message: text || 'Success' } };
+                });
+            }
+        })
+        .then(({ ok, status, data }) => {
+            if (!ok) {
+                throw new Error(data.error || data.message || `HTTP error! status: ${status}`);
+            }
+
+            console.log('Companies submitted successfully:', data);
+            setResponseMessage({
+                type: 'success',
+                message: data.message || 'Companies submitted successfully!'
+            });
+            setShowResponseModal(true);
+        })
+        .catch(error => {
+            console.error('Error submitting companies:', error);
+
+            // Check if it's a CORS error
+            if (error.message.includes('CORS') || error.message.includes('NetworkError') || error.name === 'TypeError') {
+                setResponseMessage({
+                    type: 'error',
+                    message: 'CORS Error: The server needs to allow requests from this origin. Please check the API Gateway CORS configuration.'
+                });
+            } else {
+                setResponseMessage({
+                    type: 'error',
+                    message: error.message || 'Failed to submit companies. Please check console for details.'
+                });
+            }
+            setShowResponseModal(true);
+        });
     };
 
     const handleSettingsSubmit = () => {
@@ -188,7 +267,7 @@ export default function App() {
         console.log("Submitting settings:", settingsData);
 
         // Make POST request to settings API
-        fetch('https://q0hjxggpk8.execute-api.us-west-2.amazonaws.com/dev/settings', {
+        fetch('https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/settings', {
             method: 'POST',
             mode: 'cors',
             headers: {
