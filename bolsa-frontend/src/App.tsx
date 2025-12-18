@@ -24,6 +24,16 @@ interface Company {
     marketCap?: string;
 }
 
+interface OpenPosition {
+    symbol: string;
+    buyPrice: number;
+    currentPrice: number;
+    shares: number;
+    unrealizedProfit: number;
+    returnPercent: number;
+    buyDate: string;
+}
+
 export default function App() {
     const [nextInvestment, setNextInvestment] = useState(6000);
     const [opsPerDay, setOpsPerDay] = useState(5);
@@ -49,6 +59,9 @@ export default function App() {
         { date: "2025-11-25", symbol: "GOOG", buyPrice: 120, sellPrice: 125, shares: 8, profit: 40, returnPercent: 4.2, sellType: "TP" },
     ]);
 
+    const [openPositions, setOpenPositions] = useState<OpenPosition[]>([]);
+    const [isLoadingPositions, setIsLoadingPositions] = useState(false);
+
     const [earnings, setEarnings] = useState<Company[]>([]);
     const [selectedCompanies, setSelectedCompanies] = useState<Company[]>([]);
     const [allEarningsForMonth, setAllEarningsForMonth] = useState<Company[]>([]);
@@ -58,6 +71,53 @@ export default function App() {
     const [selectedPage, setSelectedPage] = useState(1);
     const itemsPerPage = 5;
 
+    // Fetch open positions on component mount
+    useEffect(() => {
+        const fetchOpenPositions = () => {
+            setIsLoadingPositions(true);
+
+            fetch('https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/positions', {
+                method: 'GET',
+                mode: 'cors',
+                headers: {
+                    'Accept': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Positions data received:', data);
+
+                // Convert positions object to array
+                const positionsArray: OpenPosition[] = Object.entries(data.positions || {})
+                    .map(([ticker, info]: [string, any]) => {
+                        const position = info as any;
+                        const unrealizedPnl = position.unrealized_pnl || 0;
+                        const averagePrice = position.average_price || 0;
+                        const returnPercent = averagePrice !== 0 ? (unrealizedPnl / (averagePrice * position.quantity)) * 100 : 0;
+
+                        return {
+                            symbol: position.ticker || ticker,
+                            buyPrice: position.average_price || 0,
+                            currentPrice: position.market_price || 0,
+                            shares: position.quantity || 0,
+                            unrealizedProfit: position.unrealized_pnl || 0,
+                            returnPercent: returnPercent,
+                            buyDate: position.date || data.date
+                        };
+                    });
+
+                setOpenPositions(positionsArray);
+                setIsLoadingPositions(false);
+            })
+            .catch(error => {
+                console.error('Error fetching positions:', error);
+                setIsLoadingPositions(false);
+                setOpenPositions([]);
+            });
+        };
+
+        fetchOpenPositions();
+    }, []);
 
     useEffect(() => {
         if (selectedDate) {
@@ -173,6 +233,26 @@ export default function App() {
             const opDate = new Date(op.date);
             return opDate >= thresholdDate && opDate <= today;
         });
+    };
+
+    const downloadSelectedCompanies = () => {
+        if (selectedCompanies.length === 0) {
+            alert('No companies selected to download.');
+            return;
+        }
+
+        const content = selectedCompanies.map(company => company.ticker).join('\n');
+
+        // Create a blob and download
+        const blob = new Blob([content], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `selected-companies-${selectedDate ? selectedDate.toISOString().split('T')[0] : 'export'}.txt`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     };
 
     const handleEarningsSubmit = () => {
@@ -358,6 +438,81 @@ export default function App() {
                             <strong className={profitPerDay >= 0 ? "positive" : "negative"}>
                                 {profitPerDay.toFixed(2)} $
                             </strong>
+                        </div>
+                    </section>
+
+                    {/* Current Open Positions */}
+                    <section className="open-positions-section">
+                        <h2 className="table-title">Current Open Positions</h2>
+                        <div className="operations-with-stats">
+                            <div className="table-wrapper">
+                                <table className="beautiful-table">
+                                    <thead>
+                                    <tr>
+                                        <th>Symbol</th>
+                                        <th>Buy Date</th>
+                                        <th>Buy Price</th>
+                                        <th>Current Price</th>
+                                        <th>Shares</th>
+                                        <th>Unrealized P/L</th>
+                                        <th>Return (%)</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    {isLoadingPositions ? (
+                                        <tr>
+                                            <td colSpan={7} className="empty-row">
+                                                Loading open positions...
+                                            </td>
+                                        </tr>
+                                    ) : openPositions.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={7} className="empty-row">
+                                                No open positions.
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        openPositions.map((pos, i) => (
+                                            <tr key={i}>
+                                                <td>{pos.symbol}</td>
+                                                <td>{pos.buyDate}</td>
+                                                <td>${pos.buyPrice.toFixed(2)}</td>
+                                                <td>${pos.currentPrice.toFixed(2)}</td>
+                                                <td>{pos.shares}</td>
+                                                <td className={pos.unrealizedProfit >= 0 ? "positive" : "negative"}>
+                                                    {pos.unrealizedProfit >= 0 ? '+' : ''}{pos.unrealizedProfit.toFixed(2)} $
+                                                </td>
+                                                <td className={pos.returnPercent >= 0 ? "positive" : "negative"}>
+                                                    {pos.returnPercent >= 0 ? '+' : ''}{pos.returnPercent.toFixed(2)}%
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {openPositions.length > 0 && (
+                                <div className="operations-stats">
+                                    <div className="stat-card">
+                                        <span>Total Unrealized P/L</span>
+                                        <strong className={openPositions.reduce((sum, pos) => sum + pos.unrealizedProfit, 0) >= 0 ? "positive" : "negative"}>
+                                            {openPositions.reduce((sum, pos) => sum + pos.unrealizedProfit, 0) >= 0 ? '+' : ''}
+                                            {openPositions.reduce((sum, pos) => sum + pos.unrealizedProfit, 0).toFixed(2)} $
+                                        </strong>
+                                    </div>
+                                    <div className="stat-card">
+                                        <span>Total Positions</span>
+                                        <strong>{openPositions.length}</strong>
+                                    </div>
+                                    <div className="stat-card">
+                                        <span>Average Return</span>
+                                        <strong className={openPositions.reduce((sum, pos) => sum + pos.returnPercent, 0) / openPositions.length >= 0 ? "positive" : "negative"}>
+                                            {openPositions.reduce((sum, pos) => sum + pos.returnPercent, 0) / openPositions.length >= 0 ? '+' : ''}
+                                            {(openPositions.reduce((sum, pos) => sum + pos.returnPercent, 0) / openPositions.length).toFixed(2)}%
+                                        </strong>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </section>
 
@@ -567,7 +722,14 @@ export default function App() {
                                 <ul>
                                     {paginatedSelected.map((company, index) => (
                                         <li key={index}>
-                                            <span>{company.ticker} ({company.reportTime})</span>
+                                            <span>
+                                                {company.ticker} ({company.reportTime}) - ${company.currentPrice?.toFixed(2) || 'N/A'}
+                                                {company.percentageChange90d !== undefined && (
+                                                    <span className={company.percentageChange90d >= 0 ? "positive" : "negative"}>
+                                                        {' '}({company.percentageChange90d > 0 ? '+' : ''}{company.percentageChange90d.toFixed(2)}%)
+                                                    </span>
+                                                )}
+                                            </span>
                                             <button onClick={() => moveBackToEarnings(company)}>←</button>
                                         </li>
                                     ))}
@@ -594,14 +756,25 @@ export default function App() {
                         </div>
                                 {errorMessage && <div className="error-message">{errorMessage}</div>}
 
-                                {/* Submit button for Earnings section */}
-                                <button
-                                    className="submit-button"
-                                    onClick={() => setShowEarningsModal(true)}
-                                    disabled={selectedCompanies.length > opsPerDay}
-                                >
-                                    Submit
-                                </button>
+                                {/* Submit and Download buttons for Earnings section */}
+                                <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                                    <button
+                                        className="submit-button"
+                                        onClick={() => setShowEarningsModal(true)}
+                                        disabled={selectedCompanies.length > opsPerDay}
+                                        style={{ flex: 1 }}
+                                    >
+                                        Submit
+                                    </button>
+                                    <button
+                                        className="submit-button"
+                                        onClick={downloadSelectedCompanies}
+                                        disabled={selectedCompanies.length === 0}
+                                        style={{ flex: 1, backgroundColor: '#28a745' }}
+                                    >
+                                        Download TXT
+                                    </button>
+                                </div>
                             </>
                         )}
                     </section>
@@ -688,7 +861,12 @@ export default function App() {
                         <div className="modal-list">
                             {selectedCompanies.map((company, index) => (
                                 <div key={index} className="modal-list-item">
-                                    <strong>{company.ticker}</strong> - {company.name} ({company.reportTime})
+                                    <strong>{company.ticker}</strong> - {company.name} ({company.reportTime}) - ${company.currentPrice?.toFixed(2) || 'N/A'}
+                                    {company.percentageChange90d !== undefined && (
+                                        <span className={company.percentageChange90d >= 0 ? "positive" : "negative"}>
+                                            {' '}({company.percentageChange90d > 0 ? '+' : ''}{company.percentageChange90d.toFixed(2)}%)
+                                        </span>
+                                    )}
                                 </div>
                             ))}
                         </div>
