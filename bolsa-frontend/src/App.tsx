@@ -26,12 +26,14 @@ interface Company {
 
 interface OpenPosition {
     symbol: string;
-    buyPrice: number;
-    currentPrice: number;
-    shares: number;
-    unrealizedProfit: number;
-    returnPercent: number;
     buyDate: string;
+    orderType: string;
+    orderPrice: number;
+    currentPrice: number;
+    sharesToBuy: number;
+    stopLossPrice: number;
+    takeProfitPrice: number;
+    orderFilled: boolean;
 }
 
 export default function App() {
@@ -53,11 +55,7 @@ export default function App() {
     // Historical operations filter
     const [historicalPeriod, setHistoricalPeriod] = useState(5);
 
-    const [operations] = useState<Operation[]>([
-        { date: "2025-11-28", symbol: "AAPL", buyPrice: 180, sellPrice: 187, shares: 10, profit: 70, returnPercent: 3.8, sellType: "TP" },
-        { date: "2025-11-27", symbol: "TSLA", buyPrice: 200, sellPrice: 190, shares: 5, profit: -50, returnPercent: -5, sellType: "SL" },
-        { date: "2025-11-25", symbol: "GOOG", buyPrice: 120, sellPrice: 125, shares: 8, profit: 40, returnPercent: 4.2, sellType: "TP" },
-    ]);
+    const [operations] = useState<Operation[]>([]);
 
     const [openPositions, setOpenPositions] = useState<OpenPosition[]>([]);
     const [isLoadingPositions, setIsLoadingPositions] = useState(false);
@@ -91,18 +89,17 @@ export default function App() {
                 const positionsArray: OpenPosition[] = Object.entries(data.positions || {})
                     .map(([ticker, info]: [string, any]) => {
                         const position = info as any;
-                        const unrealizedPnl = position.unrealized_pnl || 0;
-                        const averagePrice = position.average_price || 0;
-                        const returnPercent = averagePrice !== 0 ? (unrealizedPnl / (averagePrice * position.quantity)) * 100 : 0;
 
                         return {
                             symbol: position.ticker || ticker,
-                            buyPrice: position.average_price || 0,
+                            buyDate: position.date || data.date,
+                            orderType: position.order_type || 'N/A',
+                            orderPrice: position.order_price || 0,
                             currentPrice: position.market_price || 0,
-                            shares: position.quantity || 0,
-                            unrealizedProfit: position.unrealized_pnl || 0,
-                            returnPercent: returnPercent,
-                            buyDate: position.date || data.date
+                            sharesToBuy: position.position || 0,
+                            stopLossPrice: position.stop_loss_price || 0,
+                            takeProfitPrice: position.take_profit_price || 0,
+                            orderFilled: position.filled || false
                         };
                     });
 
@@ -117,6 +114,45 @@ export default function App() {
         };
 
         fetchOpenPositions();
+    }, []);
+
+    // Fetch current settings from API on component mount
+    useEffect(() => {
+        const fetchSettings = () => {
+            fetch('https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/settings', {
+                method: 'GET',
+                mode: 'cors',
+                headers: {
+                    'Accept': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Settings data received:', data);
+
+                // Update settings state with fetched values
+                if (data.stopLoss !== undefined) {
+                    setStopLoss(data.stopLoss);
+                    setStopLossInput(data.stopLoss.toFixed(1));
+                }
+                if (data.takeProfit !== undefined) {
+                    setTakeProfit(data.takeProfit);
+                    setTakeProfitInput(data.takeProfit.toFixed(1));
+                }
+                if (data.nextInvestment !== undefined) {
+                    setNextInvestment(data.nextInvestment);
+                }
+                if (data.opsPerDay !== undefined) {
+                    setOpsPerDay(data.opsPerDay);
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching settings:', error);
+                // Keep default values if fetch fails
+            });
+        };
+
+        fetchSettings();
     }, []);
 
     useEffect(() => {
@@ -432,20 +468,22 @@ export default function App() {
                 {/* Left Column */}
                 <div className="left-content">
                     {/* Stats */}
-                    <section className="stats">
-                        <div className="stat-card">
-                            <span>Total Profit</span>
-                            <strong className={totalProfit >= 0 ? "positive" : "negative"}>
-                                {totalProfit} $
-                            </strong>
-                        </div>
-                        <div className="stat-card">
-                            <span>Profit / Day</span>
-                            <strong className={profitPerDay >= 0 ? "positive" : "negative"}>
-                                {profitPerDay.toFixed(2)} $
-                            </strong>
-                        </div>
-                    </section>
+                    {filteredOperations.length > 0 && (
+                        <section className="stats">
+                            <div className="stat-card">
+                                <span>Total Profit</span>
+                                <strong className={totalProfit >= 0 ? "positive" : "negative"}>
+                                    {totalProfit} $
+                                </strong>
+                            </div>
+                            <div className="stat-card">
+                                <span>Profit / Day</span>
+                                <strong className={profitPerDay >= 0 ? "positive" : "negative"}>
+                                    {profitPerDay.toFixed(2)} $
+                                </strong>
+                            </div>
+                        </section>
+                    )}
 
                     {/* Current Open Positions */}
                     <section className="open-positions-section">
@@ -455,25 +493,27 @@ export default function App() {
                                 <table className="beautiful-table">
                                     <thead>
                                     <tr>
-                                        <th>Symbol</th>
+                                        <th>Ticker</th>
                                         <th>Buy Date</th>
-                                        <th>Buy Price</th>
+                                        <th>Order Type</th>
+                                        <th>Order Price</th>
                                         <th>Current Price</th>
-                                        <th>Shares</th>
-                                        <th>Unrealized P/L</th>
-                                        <th>Return (%)</th>
+                                        <th>Shares to Buy</th>
+                                        <th>Stop Loss</th>
+                                        <th>Take Profit</th>
+                                        <th>Order Filled</th>
                                     </tr>
                                     </thead>
                                     <tbody>
                                     {isLoadingPositions ? (
                                         <tr>
-                                            <td colSpan={7} className="empty-row">
+                                            <td colSpan={9} className="empty-row">
                                                 Loading open positions...
                                             </td>
                                         </tr>
                                     ) : openPositions.length === 0 ? (
                                         <tr>
-                                            <td colSpan={7} className="empty-row">
+                                            <td colSpan={9} className="empty-row">
                                                 No open positions.
                                             </td>
                                         </tr>
@@ -482,14 +522,16 @@ export default function App() {
                                             <tr key={i}>
                                                 <td>{pos.symbol}</td>
                                                 <td>{pos.buyDate}</td>
-                                                <td>${pos.buyPrice.toFixed(2)}</td>
+                                                <td>{pos.orderType}</td>
+                                                <td>${pos.orderPrice.toFixed(2)}</td>
                                                 <td>${pos.currentPrice.toFixed(2)}</td>
-                                                <td>{pos.shares}</td>
-                                                <td className={pos.unrealizedProfit >= 0 ? "positive" : "negative"}>
-                                                    {pos.unrealizedProfit >= 0 ? '+' : ''}{pos.unrealizedProfit.toFixed(2)} $
-                                                </td>
-                                                <td className={pos.returnPercent >= 0 ? "positive" : "negative"}>
-                                                    {pos.returnPercent >= 0 ? '+' : ''}{pos.returnPercent.toFixed(2)}%
+                                                <td>{pos.sharesToBuy}</td>
+                                                <td>${pos.stopLossPrice.toFixed(2)}</td>
+                                                <td>${pos.takeProfitPrice.toFixed(2)}</td>
+                                                <td>
+                                                    <span className={pos.orderFilled ? "positive" : "negative"}>
+                                                        {pos.orderFilled ? '✓ Yes' : '✗ No'}
+                                                    </span>
                                                 </td>
                                             </tr>
                                         ))
@@ -497,102 +539,9 @@ export default function App() {
                                     </tbody>
                                 </table>
                             </div>
-                            {openPositions.length > 0 && (
-                                <div className="operations-stats">
-                                    <div className="stat-card">
-                                        <span>Total Unrealized P/L</span>
-                                        <strong className={openPositions.reduce((sum, pos) => sum + pos.unrealizedProfit, 0) >= 0 ? "positive" : "negative"}>
-                                            {openPositions.reduce((sum, pos) => sum + pos.unrealizedProfit, 0) >= 0 ? '+' : ''}
-                                            {openPositions.reduce((sum, pos) => sum + pos.unrealizedProfit, 0).toFixed(2)} $
-                                        </strong>
-                                    </div>
-                                    <div className="stat-card">
-                                        <span>Total Positions</span>
-                                        <strong>{openPositions.length}</strong>
-                                    </div>
-                                    <div className="stat-card">
-                                        <span>Average Return</span>
-                                        <strong className={openPositions.reduce((sum, pos) => sum + pos.returnPercent, 0) / openPositions.length >= 0 ? "positive" : "negative"}>
-                                            {openPositions.reduce((sum, pos) => sum + pos.returnPercent, 0) / openPositions.length >= 0 ? '+' : ''}
-                                            {(openPositions.reduce((sum, pos) => sum + pos.returnPercent, 0) / openPositions.length).toFixed(2)}%
-                                        </strong>
-                                    </div>
-                                </div>
-                            )}
                         </div>
                     </section>
 
-                    {/* Operations Table with Stats */}
-                    <h2 className="table-title">Operations List: {selectedDate ? selectedDate.toDateString() : ""}</h2>
-                    <div className="operations-with-stats">
-                        <div className="table-wrapper">
-                            <table className="beautiful-table">
-                                <thead>
-                                <tr>
-                                    <th>Date</th>
-                                    <th>Symbol</th>
-                                    <th>Buy Price</th>
-                                    <th>Sell Price</th>
-                                    <th>Shares</th>
-                                    <th>Profit</th>
-                                    <th>Return (%)</th>
-                                    <th>Sell Type</th>
-                                </tr>
-                                </thead>
-                                <tbody>
-                                {filteredOperations.length === 0 ? (
-                                    <tr>
-                                        <td colSpan={8} className="empty-row">
-                                            No operations match the selected date.
-                                        </td>
-                                    </tr>
-                                ) : (
-                                    filteredOperations.map((op, i) => (
-                                        <tr key={i}>
-                                            <td>{op.date}</td>
-                                            <td>{op.symbol}</td>
-                                            <td>{op.buyPrice}</td>
-                                            <td>{op.sellPrice}</td>
-                                            <td>{op.shares}</td>
-                                            <td className={op.profit >= 0 ? "positive" : "negative"}>{op.profit} $</td>
-                                            <td className={op.returnPercent >= 0 ? "positive" : "negative"}>{op.returnPercent}%</td>
-                                            <td>{op.sellType}</td>
-                                        </tr>
-                                    ))
-                                )}
-                                </tbody>
-                            </table>
-                        </div>
-                        {filteredOperations.length > 0 && (
-                            <div className="operations-stats">
-                                <div className="stat-card">
-                                    <span>Overall Profit</span>
-                                    <strong className={filteredOperations.reduce((sum, op) => sum + op.profit, 0) >= 0 ? "positive" : "negative"}>
-                                        {filteredOperations.reduce((sum, op) => sum + op.profit, 0).toFixed(2)} $
-                                    </strong>
-                                </div>
-                                <div className="stat-card">
-                                    <span>Win/Loss Rate</span>
-                                    <strong>
-                                        <span className="positive">{filteredOperations.filter(op => op.profit >= 0).length}</span>
-                                        {" / "}
-                                        <span className="negative">{filteredOperations.filter(op => op.profit < 0).length}</span>
-                                    </strong>
-                                    <div style={{ fontSize: '14px', marginTop: '8px', color: '#666' }}>
-                                        {((filteredOperations.filter(op => op.profit >= 0).length / filteredOperations.length) * 100).toFixed(1)}% Win Rate
-                                    </div>
-                                </div>
-                                <div className="stat-card">
-                                    <span>$ Won / $ Lost</span>
-                                    <strong>
-                                        <span className="positive">{filteredOperations.filter(op => op.profit >= 0).reduce((sum, op) => sum + op.profit, 0).toFixed(2)} $</span>
-                                        {" / "}
-                                        <span className="negative">{Math.abs(filteredOperations.filter(op => op.profit < 0).reduce((sum, op) => sum + op.profit, 0)).toFixed(2)} $</span>
-                                    </strong>
-                                </div>
-                            </div>
-                        )}
-                    </div>
 
                     {/* Historical Operations */}
                     <section className="historical-operations">
@@ -798,6 +747,30 @@ export default function App() {
                     {/* Trading Settings Section */}
                     <section className="trading-settings">
                         <h2>Trading Settings</h2>
+
+                        {/* Current Settings Display */}
+                        <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #dee2e6' }}>
+                            <h3 style={{ marginTop: 0, marginBottom: '15px', fontSize: '16px', color: '#495057' }}>Current Settings</h3>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div>
+                                    <span style={{ color: '#6c757d', fontSize: '14px' }}>Stop Loss:</span>
+                                    <strong style={{ display: 'block', fontSize: '18px', color: '#212529', marginTop: '4px' }}>{stopLoss}%</strong>
+                                </div>
+                                <div>
+                                    <span style={{ color: '#6c757d', fontSize: '14px' }}>Take Profit:</span>
+                                    <strong style={{ display: 'block', fontSize: '18px', color: '#212529', marginTop: '4px' }}>{takeProfit}%</strong>
+                                </div>
+                                <div>
+                                    <span style={{ color: '#6c757d', fontSize: '14px' }}>Investment per Trade:</span>
+                                    <strong style={{ display: 'block', fontSize: '18px', color: '#212529', marginTop: '4px' }}>${nextInvestment}</strong>
+                                </div>
+                                <div>
+                                    <span style={{ color: '#6c757d', fontSize: '14px' }}>Trades per Day:</span>
+                                    <strong style={{ display: 'block', fontSize: '18px', color: '#212529', marginTop: '4px' }}>{opsPerDay}</strong>
+                                </div>
+                            </div>
+                        </div>
+
                         <div className="trading-settings-grid">
                             <div className="trading-setting-item">
                                 <label>Stop Loss (%)</label>
@@ -848,7 +821,7 @@ export default function App() {
                                 />
                             </div>
                             <div className="trading-setting-item">
-                                <label>Next Investment per Trade</label>
+                                <label>Next Investment</label>
                                 <input type="number" value={nextInvestment} onChange={e => setNextInvestment(Number(e.target.value))} />
                             </div>
                             <div className="trading-setting-item">
