@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import "./App.css";
+import { useAuth } from "./AuthContext";
+import { authenticatedFetch } from "./apiHelper";
 
 interface Operation {
     date: string;
@@ -37,6 +39,8 @@ interface OpenPosition {
 }
 
 export default function App() {
+    const { logout, getAuthToken } = useAuth();
+
     const [nextInvestment, setNextInvestment] = useState(6000);
     const [opsPerDay, setOpsPerDay] = useState(5);
     const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -71,63 +75,119 @@ export default function App() {
 
     // Fetch open positions on component mount
     useEffect(() => {
-        const fetchOpenPositions = () => {
+        // Helper function to safely convert to number
+        const toNumber = (value: any): number => {
+            if (value === null || value === undefined || value === '') {
+                return 0;
+            }
+            const num = Number(value);
+            return isNaN(num) ? 0 : num;
+        };
+
+        const fetchOpenPositions = async () => {
             setIsLoadingPositions(true);
 
-            fetch('https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/positions', {
-                method: 'GET',
-                mode: 'cors',
-                headers: {
-                    'Accept': 'application/json',
+            try {
+                console.log('Fetching positions from API...');
+                const response = await authenticatedFetch(
+                    'https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/positions',
+                    {
+                        method: 'GET',
+                    },
+                    getAuthToken
+                );
+
+                console.log('Positions response status:', response.status);
+                console.log('Positions response ok:', response.ok);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
-            })
-            .then(response => response.json())
-            .then(data => {
+
+                const data = await response.json();
                 console.log('Positions data received:', data);
 
+                // Safely handle the data even if structure is unexpected
+                if (!data || typeof data !== 'object') {
+                    console.warn('Invalid positions data format');
+                    setOpenPositions([]);
+                    setIsLoadingPositions(false);
+                    return;
+                }
+
+                // Handle case where positions might not exist
+                const positions = data.positions || {};
+
                 // Convert positions object to array
-                const positionsArray: OpenPosition[] = Object.entries(data.positions || {})
+                const positionsArray: OpenPosition[] = Object.entries(positions)
                     .map(([ticker, info]: [string, any]) => {
                         const position = info as any;
 
-                        return {
+                        const result = {
                             symbol: position.ticker || ticker,
-                            buyDate: position.date || data.date,
+                            buyDate: position.date || data.date || 'N/A',
                             orderType: position.order_type || 'N/A',
-                            orderPrice: position.order_price || 0,
-                            currentPrice: position.market_price || 0,
-                            sharesToBuy: position.position || 0,
-                            stopLossPrice: position.stop_loss_price || 0,
-                            takeProfitPrice: position.take_profit_price || 0,
-                            orderFilled: position.filled || false
+                            orderPrice: toNumber(position.order_price),
+                            currentPrice: toNumber(position.market_price),
+                            sharesToBuy: toNumber(position.position),
+                            stopLossPrice: toNumber(position.stop_loss_price),
+                            takeProfitPrice: toNumber(position.take_profit_price),
+                            orderFilled: Boolean(position.filled)
                         };
+
+                        // Log conversion for debugging
+                        console.log('Converted position:', ticker, {
+                            orderPrice: position.order_price,
+                            converted: result.orderPrice,
+                            type: typeof result.orderPrice
+                        });
+
+                        return result;
                     });
 
+                console.log('Final positions array:', positionsArray);
                 setOpenPositions(positionsArray);
                 setIsLoadingPositions(false);
-            })
-            .catch(error => {
+            } catch (error) {
                 console.error('Error fetching positions:', error);
+                console.error('Error name:', (error as Error).name);
+                console.error('Error message:', (error as Error).message);
+
+                // Check if it's a network/CORS error
+                if ((error as Error).name === 'TypeError' || (error as Error).message.includes('Failed to fetch')) {
+                    console.error('⚠️ CORS or Network Error - API may not be accessible from this origin');
+                    console.error('Current origin:', window.location.origin);
+                }
+
                 setIsLoadingPositions(false);
                 setOpenPositions([]);
-            });
+            }
         };
 
         fetchOpenPositions();
-    }, []);
+    }, [getAuthToken]);
 
     // Fetch current settings from API on component mount
     useEffect(() => {
-        const fetchSettings = () => {
-            fetch('https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/settings', {
-                method: 'GET',
-                mode: 'cors',
-                headers: {
-                    'Accept': 'application/json',
+        const fetchSettings = async () => {
+            try {
+                console.log('Fetching settings from API...');
+                const response = await authenticatedFetch(
+                    'https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/settings',
+                    {
+                        method: 'GET',
+                    },
+                    getAuthToken
+                );
+
+                console.log('Settings response status:', response.status);
+                console.log('Settings response ok:', response.ok);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
-            })
-            .then(response => response.json())
-            .then(data => {
+
+                const data = await response.json();
                 console.log('Settings data received:', data);
 
                 // Update settings state with fetched values
@@ -145,15 +205,22 @@ export default function App() {
                 if (data.opsPerDay !== undefined) {
                     setOpsPerDay(data.opsPerDay);
                 }
-            })
-            .catch(error => {
+            } catch (error) {
                 console.error('Error fetching settings:', error);
+                console.error('Error name:', (error as Error).name);
+                console.error('Error message:', (error as Error).message);
+
+                // Check if it's a network/CORS error
+                if ((error as Error).name === 'TypeError' || (error as Error).message.includes('Failed to fetch')) {
+                    console.error('⚠️ CORS or Network Error - keeping default settings');
+                    console.error('Current origin:', window.location.origin);
+                }
                 // Keep default values if fetch fails
-            });
+            }
         };
 
         fetchSettings();
-    }, []);
+    }, [getAuthToken]);
 
     useEffect(() => {
         if (selectedDate) {
@@ -163,9 +230,13 @@ export default function App() {
 
             setIsLoadingEarnings(true);
 
-            fetch(`https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/calendar/${year}/${month}/${day}`)
-                .then(response => response.json())
-                .then(data => {
+            authenticatedFetch(
+                `https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/calendar/${year}/${month}/${day}`,
+                { method: 'GET' },
+                getAuthToken
+            )
+                .then((response: Response) => response.json())
+                .then((data: any) => {
                     // Convert object to array - new API format has symbol as key
                     const companiesForDate = Object.entries(data)
                         .map(([ticker, info]: [string, any]) => ({
@@ -188,7 +259,7 @@ export default function App() {
 
                     setIsLoadingEarnings(false);
                 })
-                .catch(error => {
+                .catch((error: Error) => {
                     console.error('Error fetching earnings data:', error);
                     setIsLoadingEarnings(false);
                     setErrorMessage('Failed to load earnings data. Please try again.');
@@ -201,7 +272,7 @@ export default function App() {
 
         setEarningsPage(1);
         setSelectedPage(1);
-    }, [selectedDate, opsPerDay]);
+    }, [selectedDate, opsPerDay, getAuthToken]);
 
     const moveToSelected = (company: Company) => {
         if (selectedCompanies.length >= opsPerDay) {
@@ -230,7 +301,14 @@ export default function App() {
         setErrorMessage("");
     };
 
-    const paginatedEarnings = earnings.slice(
+    // Sort earnings by percentage change (highest first)
+    const sortedEarnings = [...earnings].sort((a, b) => {
+        const aPercent = a.percentageChange90d ?? -Infinity;
+        const bPercent = b.percentageChange90d ?? -Infinity;
+        return bPercent - aPercent; // Descending order (highest first)
+    });
+
+    const paginatedEarnings = sortedEarnings.slice(
         (earningsPage - 1) * itemsPerPage,
         earningsPage * itemsPerPage
     );
@@ -312,16 +390,15 @@ export default function App() {
         console.log("Submitting earnings companies for today:", earningsData);
 
         // Make POST request to companies API
-        fetch('https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/companies', {
-            method: 'POST',
-            mode: 'cors',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
+        authenticatedFetch(
+            'https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/companies',
+            {
+                method: 'POST',
+                body: JSON.stringify(earningsData)
             },
-            body: JSON.stringify(earningsData)
-        })
-        .then(response => {
+            getAuthToken
+        )
+        .then((response: Response) => {
             console.log('Response status:', response.status);
             console.log('Response ok:', response.ok);
             console.log('Response headers:', response.headers);
@@ -329,19 +406,19 @@ export default function App() {
             // Check if response has content
             const contentType = response.headers.get('content-type');
             if (contentType && contentType.includes('application/json')) {
-                return response.json().then(data => {
+                return response.json().then((data: any) => {
                     console.log('Response data:', data);
                     return { ok: response.ok, status: response.status, data };
                 });
             } else {
                 // If no JSON content, return empty object
-                return response.text().then(text => {
+                return response.text().then((text: string) => {
                     console.log('Response text:', text);
                     return { ok: response.ok, status: response.status, data: { message: text || 'Success' } };
                 });
             }
         })
-        .then(({ ok, status, data }) => {
+        .then(({ ok, status, data }: { ok: boolean; status: number; data: any }) => {
             if (!ok) {
                 throw new Error(data.error || data.message || `HTTP error! status: ${status}`);
             }
@@ -357,7 +434,7 @@ export default function App() {
             });
             setShowResponseModal(true);
         })
-        .catch(error => {
+        .catch((error: Error) => {
             console.error('Error submitting companies:', error);
 
             // Check if it's a CORS error
@@ -389,16 +466,15 @@ export default function App() {
         console.log("Submitting settings:", settingsData);
 
         // Make POST request to settings API
-        fetch('https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/settings', {
-            method: 'POST',
-            mode: 'cors',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
+        authenticatedFetch(
+            'https://grv8xax0z5.execute-api.us-west-2.amazonaws.com/settings',
+            {
+                method: 'POST',
+                body: JSON.stringify(settingsData)
             },
-            body: JSON.stringify(settingsData)
-        })
-        .then(response => {
+            getAuthToken
+        )
+        .then((response: Response) => {
             console.log('Response status:', response.status);
             console.log('Response ok:', response.ok);
             console.log('Response headers:', response.headers);
@@ -406,19 +482,19 @@ export default function App() {
             // Check if response has content
             const contentType = response.headers.get('content-type');
             if (contentType && contentType.includes('application/json')) {
-                return response.json().then(data => {
+                return response.json().then((data: any) => {
                     console.log('Response data:', data);
                     return { ok: response.ok, status: response.status, data };
                 });
             } else {
                 // If no JSON content, return empty object
-                return response.text().then(text => {
+                return response.text().then((text: string) => {
                     console.log('Response text:', text);
                     return { ok: response.ok, status: response.status, data: { message: text || 'Success' } };
                 });
             }
         })
-        .then(({ ok, status, data }) => {
+        .then(({ ok, status, data }: { ok: boolean; status: number; data: any }) => {
             if (!ok) {
                 throw new Error(data.error || data.message || `HTTP error! status: ${status}`);
             }
@@ -430,7 +506,7 @@ export default function App() {
             });
             setShowResponseModal(true);
         })
-        .catch(error => {
+        .catch((error: Error) => {
             console.error('Error saving settings:', error);
 
             // Check if it's a CORS error
@@ -452,7 +528,17 @@ export default function App() {
     return (
         <div className="container">
             <header className="header">
-                <h1>Trading Dashboard</h1>
+                <div className="header-top">
+                    <div className="header-title">
+                        <h1>Trading Dashboard</h1>
+                    </div>
+                    <button
+                        onClick={logout}
+                        className="logout-button"
+                    >
+                        Logout
+                    </button>
+                </div>
                 <div className="top-date-filter">
                     <label>Select Date:</label>
                     <DatePicker
@@ -467,21 +553,25 @@ export default function App() {
             <div className="main-content">
                 {/* Left Column */}
                 <div className="left-content">
-                    {/* Stats */}
-                    {filteredOperations.length > 0 && (
+                    {/* Stats - only show when there are actual operations with non-zero values */}
+                    {filteredOperations.length > 0 && (totalProfit !== 0 || profitPerDay !== 0) && (
                         <section className="stats">
-                            <div className="stat-card">
-                                <span>Total Profit</span>
-                                <strong className={totalProfit >= 0 ? "positive" : "negative"}>
-                                    {totalProfit} $
-                                </strong>
-                            </div>
-                            <div className="stat-card">
-                                <span>Profit / Day</span>
-                                <strong className={profitPerDay >= 0 ? "positive" : "negative"}>
-                                    {profitPerDay.toFixed(2)} $
-                                </strong>
-                            </div>
+                            {totalProfit !== 0 && (
+                                <div className="stat-card">
+                                    <span>Total Profit</span>
+                                    <strong className={totalProfit >= 0 ? "positive" : "negative"}>
+                                        {totalProfit} $
+                                    </strong>
+                                </div>
+                            )}
+                            {profitPerDay !== 0 && (
+                                <div className="stat-card">
+                                    <span>Profit / Day</span>
+                                    <strong className={profitPerDay >= 0 ? "positive" : "negative"}>
+                                        {profitPerDay.toFixed(2)} $
+                                    </strong>
+                                </div>
+                            )}
                         </section>
                     )}
 
@@ -518,23 +608,31 @@ export default function App() {
                                             </td>
                                         </tr>
                                     ) : (
-                                        openPositions.map((pos, i) => (
-                                            <tr key={i}>
-                                                <td>{pos.symbol}</td>
-                                                <td>{pos.buyDate}</td>
-                                                <td>{pos.orderType}</td>
-                                                <td>${pos.orderPrice.toFixed(2)}</td>
-                                                <td>${pos.currentPrice.toFixed(2)}</td>
-                                                <td>{pos.sharesToBuy}</td>
-                                                <td>${pos.stopLossPrice.toFixed(2)}</td>
-                                                <td>${pos.takeProfitPrice.toFixed(2)}</td>
+                                        openPositions.map((pos, i) => {
+                                            // Extra safety: ensure all numeric values are actually numbers
+                                            const safeOrderPrice = typeof pos.orderPrice === 'number' && !isNaN(pos.orderPrice) ? pos.orderPrice : 0;
+                                            const safeCurrentPrice = typeof pos.currentPrice === 'number' && !isNaN(pos.currentPrice) ? pos.currentPrice : 0;
+                                            const safeStopLoss = typeof pos.stopLossPrice === 'number' && !isNaN(pos.stopLossPrice) ? pos.stopLossPrice : 0;
+                                            const safeTakeProfit = typeof pos.takeProfitPrice === 'number' && !isNaN(pos.takeProfitPrice) ? pos.takeProfitPrice : 0;
+
+                                            return (
+                                                <tr key={i}>
+                                                    <td>{pos.symbol}</td>
+                                                    <td>{pos.buyDate}</td>
+                                                    <td>{pos.orderType}</td>
+                                                    <td>${safeOrderPrice.toFixed(2)}</td>
+                                                    <td>${safeCurrentPrice.toFixed(2)}</td>
+                                                    <td>{pos.sharesToBuy || 0}</td>
+                                                    <td>${safeStopLoss.toFixed(2)}</td>
+                                                    <td>${safeTakeProfit.toFixed(2)}</td>
                                                 <td>
                                                     <span className={pos.orderFilled ? "positive" : "negative"}>
-                                                        {pos.orderFilled ? '✓ Yes' : '✗ No'}
+                                                        {pos.orderFilled ? 'Yes' : 'No'}
                                                     </span>
                                                 </td>
-                                            </tr>
-                                        ))
+                                                </tr>
+                                            );
+                                        })
                                     )}
                                     </tbody>
                                 </table>
@@ -648,7 +746,7 @@ export default function App() {
                                         {paginatedEarnings.map((company, index) => (
                                             <li key={index}>
                                                 <span>
-                                                    {company.ticker} ({company.reportTime}) - ${company.currentPrice?.toFixed(2) || 'N/A'}
+                                                    {company.ticker} ({company.reportTime}) - {company.currentPrice !== undefined ? `$${company.currentPrice.toFixed(2)}` : 'N/A'}
                                                     {company.percentageChange90d !== undefined && (
                                                         <span className={company.percentageChange90d >= 0 ? "positive" : "negative"}>
                                                             {' '}({company.percentageChange90d > 0 ? '+' : ''}{company.percentageChange90d.toFixed(2)}%)
@@ -660,7 +758,7 @@ export default function App() {
                                         ))}
                                         {earnings.length === 0 && !isLoadingEarnings && <p>No companies available.</p>}
                                     </ul>
-                                    {earnings.length > itemsPerPage && (
+                                    {sortedEarnings.length > itemsPerPage && (
                                         <div className="pagination">
                                             <button
                                                 onClick={() => setEarningsPage(prev => Math.max(1, prev - 1))}
@@ -668,10 +766,10 @@ export default function App() {
                                             >
                                                 ←
                                             </button>
-                                            <span>Page {earningsPage} of {Math.ceil(earnings.length / itemsPerPage)}</span>
+                                            <span>Page {earningsPage} of {Math.ceil(sortedEarnings.length / itemsPerPage)}</span>
                                             <button
-                                                onClick={() => setEarningsPage(prev => Math.min(Math.ceil(earnings.length / itemsPerPage), prev + 1))}
-                                                disabled={earningsPage === Math.ceil(earnings.length / itemsPerPage)}
+                                                onClick={() => setEarningsPage(prev => Math.min(Math.ceil(sortedEarnings.length / itemsPerPage), prev + 1))}
+                                                disabled={earningsPage === Math.ceil(sortedEarnings.length / itemsPerPage)}
                                             >
                                                 →
                                             </button>
@@ -691,7 +789,7 @@ export default function App() {
                                 {paginatedSelected.map((company, index) => (
                                     <li key={index}>
                                         <span>
-                                            {company.ticker} ({company.reportTime}) - ${company.currentPrice?.toFixed(2) || 'N/A'}
+                                            {company.ticker} ({company.reportTime}) - {company.currentPrice !== undefined ? `$${company.currentPrice.toFixed(2)}` : 'N/A'}
                                             {company.percentageChange90d !== undefined && (
                                                 <span className={company.percentageChange90d >= 0 ? "positive" : "negative"}>
                                                     {' '}({company.percentageChange90d > 0 ? '+' : ''}{company.percentageChange90d.toFixed(2)}%)
@@ -850,7 +948,7 @@ export default function App() {
                         <div className="modal-list">
                             {selectedCompanies.map((company, index) => (
                                 <div key={index} className="modal-list-item">
-                                    <strong>{company.ticker}</strong> - {company.name} ({company.reportTime}) - {company.currentPrice ? `$${company.currentPrice.toFixed(2)}` : 'N/A'}
+                                    <strong>{company.ticker}</strong> - {company.name} ({company.reportTime}) - {company.currentPrice !== undefined ? `$${company.currentPrice.toFixed(2)}` : 'N/A'}
                                     {company.percentageChange90d !== undefined && (
                                         <span className={company.percentageChange90d >= 0 ? "positive" : "negative"}>
                                             {' '}({company.percentageChange90d > 0 ? '+' : ''}{company.percentageChange90d.toFixed(2)}%)
@@ -914,7 +1012,7 @@ export default function App() {
             {showResponseModal && (
                 <div className="modal-overlay" onClick={() => setShowResponseModal(false)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-                        <h2>{responseMessage.type === 'success' ? '✓ Success' : '✗ Error'}</h2>
+                        <h2>{responseMessage.type === 'success' ? 'Success' : 'Error'}</h2>
                         <div className={`response-message ${responseMessage.type}`}>
                             {responseMessage.message}
                         </div>
